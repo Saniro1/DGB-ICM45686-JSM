@@ -48,9 +48,9 @@ void loop() {
   imu.readFusedMotion(motion);
 
   // Motion is always reported. Touch detection must never zero the IMU data.
-  // Restore the last user-tested axis mapping; do not apply an unverified axis swap.
-  ds4Report.gyro_x = motion.gx;
-  ds4Report.gyro_y = motion.gy;
+  // TEST VARIANT A: swap gyro X and Y; keep Z unchanged.
+  ds4Report.gyro_x = motion.gy;
+  ds4Report.gyro_y = motion.gx;
   ds4Report.gyro_z = motion.gz;
   ds4Report.accel_x = motion.ax;
   ds4Report.accel_y = motion.ay;
