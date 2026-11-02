@@ -53,10 +53,10 @@ void loop() {
   ImuRawData motion;
   imu.readFusedMotion(motion);
 
-  // Keep the verified sensor-to-report axis mapping.
+  // FORCE Z direction reversal at the sensor-to-report mapping boundary.
   const float targetGyroX = (float)motion.gx;
   const float targetGyroY = (float)motion.gz;
-  const float targetGyroZ = (float)motion.gy;
+  const float targetGyroZ = -((float)motion.gy);
 
   // Seed the filter from the first real sample to avoid a startup ramp.
   if (!gyroFilterInitialized) {
@@ -70,7 +70,7 @@ void loop() {
     filteredGyroZ += 0.40f * (targetGyroZ - filteredGyroZ);
   }
 
-  // Send Z with its original sign; no inversion at the HID-report boundary.
+  // Z was already inverted above; do not invert it again at HID output.
   ds4Report.gyro_x = (int16_t)(filteredGyroX >= 0.0f ? filteredGyroX + 0.5f : filteredGyroX - 0.5f);
   ds4Report.gyro_y = (int16_t)(filteredGyroY >= 0.0f ? filteredGyroY + 0.5f : filteredGyroY - 0.5f);
   int32_t reportGyroZ = (int32_t)(filteredGyroZ >= 0.0f ? filteredGyroZ + 0.5f : filteredGyroZ - 0.5f);
