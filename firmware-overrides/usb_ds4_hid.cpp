@@ -18,8 +18,20 @@ void UsbDs4Hid::begin() {
  TinyUSBDevice.setManufacturerDescriptor("Sony Interactive Entertainment");
  TinyUSBDevice.setProductDescriptor("Wireless Controller");
  _usbHid.setPollInterval(1);
+ // Full-speed USB interrupt endpoints support a 1 ms polling interval.
+ // Keep this explicit: it is the endpoint interval requested from the host.
+ _usbHid.setPollInterval(1);
  _usbHid.setReportDescriptor(ds4_hid_report_descriptor,sizeof(ds4_hid_report_descriptor));
  _usbHid.begin();
+
+ // On RP2040/TinyUSB the device may already have enumerated before this
+ // interface was registered. Re-enumerate so the host receives the final
+ // HID interface descriptor, including the 1 ms endpoint interval.
+ if (TinyUSBDevice.mounted()) {
+  TinyUSBDevice.detach();
+  delay(10);
+  TinyUSBDevice.attach();
+ }
 }
 bool UsbDs4Hid::isReady(){return _usbHid.ready();}
 bool UsbDs4Hid::sendReport(const DS4InputReport& report){
