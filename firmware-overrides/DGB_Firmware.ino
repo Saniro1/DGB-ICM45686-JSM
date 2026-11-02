@@ -56,7 +56,7 @@ void loop() {
   // Reverse Y and Z at the sensor-to-report mapping boundary.
   const float targetGyroX = (float)motion.gx;
   const float targetGyroY = -((float)motion.gz);
-  const float targetGyroZ = -((float)motion.gy);
+  const float targetGyroZ = (float)motion.gy;
 
   // Seed the filter from the first real sample to avoid a startup ramp.
   if (!gyroFilterInitialized) {
