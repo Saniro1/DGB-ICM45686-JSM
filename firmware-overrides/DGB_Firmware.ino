@@ -75,10 +75,10 @@ void loop() {
   // Reverse Y and Z at the sensor-to-report mapping boundary.
   const float targetGyroX = (float)motion.gx;
   const float targetGyroY = -((float)motion.gz);
-  const rawGyroZ = (float)motion.gy;
-  const rawAccelX = (float)motion.ax;
-  const rawAccelY = (float)motion.ay;
-  const rawAccelZ = (float)motion.az;
+  const float rawGyroZ = (float)motion.gy;
+  const float rawAccelX = (float)motion.ax;
+  const float rawAccelY = (float)motion.ay;
+  const float rawAccelZ = (float)motion.az;
 
   // During startup, seed the history. Once three samples are available,
   // median filtering rejects isolated spikes on roll and all accel axes.
