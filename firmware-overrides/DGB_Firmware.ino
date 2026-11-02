@@ -62,7 +62,8 @@ void setup() {
 
 void loop() {
   uint32_t now = micros();
-  if ((uint32_t)(now - lastReportUs) < 1000) {
+  // Pace DS4 reports at ~980 Hz (1020 us), slightly below the 1 ms USB interval.
+  if ((uint32_t)(now - lastReportUs) < 1020) {
     return;
   }
   lastReportUs = now;
