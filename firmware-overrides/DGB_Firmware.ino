@@ -70,11 +70,10 @@ void loop() {
     filteredGyroZ += 0.40f * (targetGyroZ - filteredGyroZ);
   }
 
-  // Round first, then invert Z at the final HID-report boundary.
+  // Send Z with its original sign; no inversion at the HID-report boundary.
   ds4Report.gyro_x = (int16_t)(filteredGyroX >= 0.0f ? filteredGyroX + 0.5f : filteredGyroX - 0.5f);
   ds4Report.gyro_y = (int16_t)(filteredGyroY >= 0.0f ? filteredGyroY + 0.5f : filteredGyroY - 0.5f);
   int32_t reportGyroZ = (int32_t)(filteredGyroZ >= 0.0f ? filteredGyroZ + 0.5f : filteredGyroZ - 0.5f);
-  reportGyroZ = -reportGyroZ;
   if (reportGyroZ > 32767) reportGyroZ = 32767;
   if (reportGyroZ < -32768) reportGyroZ = -32768;
   ds4Report.gyro_z = (int16_t)reportGyroZ;
