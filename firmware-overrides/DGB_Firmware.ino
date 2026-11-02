@@ -7,10 +7,14 @@ static DS4InputReport ds4Report;
 static uint32_t lastReportUs = 0;
 static uint16_t reportCounter = 0;
 
-// First-order low-pass filters. Lower alpha means stronger smoothing.
+// Aggressive gyro drift suppression for the stationary test build.
 static float filteredGyroX = 0.0f;
 static float filteredGyroY = 0.0f;
 static float filteredGyroZ = 0.0f;
+static float gyroBiasX = 0.0f;
+static float gyroBiasY = 0.0f;
+static float gyroBiasZ = 0.0f;
+static bool gyroBiasInitialized = false;
 static float filteredAccelX = 0.0f;
 static float filteredAccelY = 0.0f;
 static float filteredAccelZ = 0.0f;
@@ -74,8 +78,8 @@ void loop() {
   imu.readFusedMotion(motion);
 
   // Reverse Y and Z at the sensor-to-report mapping boundary.
-  const float targetGyroX = (float)motion.gx;
-  const float targetGyroY = -((float)motion.gz);
+  const float rawGyroX = (float)motion.gx;
+  const float rawGyroY = -((float)motion.gz);
   const float rawGyroZ = (float)motion.gy;
   const float rawAccelX = (float)motion.ax;
   const float rawAccelY = (float)motion.ay;
@@ -103,20 +107,48 @@ void loop() {
   previousAccelZ1 = rawAccelZ;
   if (spikeFilterSamples < 2) ++spikeFilterSamples;
 
-  // Seed all filters from the first real sample to avoid a startup ramp.
+  // Learn the residual zero-rate bias while the gyro vector is quiet.
+  // This intentionally favors stillness over responsiveness for this test.
+  if (!gyroBiasInitialized) {
+    gyroBiasX = rawGyroX;
+    gyroBiasY = rawGyroY;
+    gyroBiasZ = rawGyroZ;
+    gyroBiasInitialized = true;
+  }
+  const float gyroMagnitudeSq =
+      rawGyroX * rawGyroX + rawGyroY * rawGyroY + rawGyroZ * rawGyroZ;
+  if (gyroMagnitudeSq < (400.0f * 400.0f)) {
+    const float biasAlpha = 0.005f;
+    gyroBiasX += biasAlpha * (rawGyroX - gyroBiasX);
+    gyroBiasY += biasAlpha * (rawGyroY - gyroBiasY);
+    gyroBiasZ += biasAlpha * (rawGyroZ - gyroBiasZ);
+  }
+
+  // Remove the learned bias, then apply a large zero-rate deadband.
+  float targetGyroX = rawGyroX - gyroBiasX;
+  float targetGyroY = rawGyroY - gyroBiasY;
+  float targetGyroZCorrected = rawGyroZ - gyroBiasZ;
+  const float gyroDeadband = 18.0f;
+  if (fabsf(targetGyroX) < gyroDeadband) targetGyroX = 0.0f;
+  if (fabsf(targetGyroY) < gyroDeadband) targetGyroY = 0.0f;
+  if (fabsf(targetGyroZCorrected) < gyroDeadband) targetGyroZCorrected = 0.0f;
+
+  // Seed all filters from the first corrected sample to avoid a startup ramp.
   if (!motionFilterInitialized) {
     filteredGyroX = targetGyroX;
     filteredGyroY = targetGyroY;
-    filteredGyroZ = targetGyroZ;
+    filteredGyroZ = targetGyroZCorrected;
     filteredAccelX = targetAccelX;
     filteredAccelY = targetAccelY;
     filteredAccelZ = targetAccelZ;
     motionFilterInitialized = true;
   } else {
-    // Keep pitch (X) and yaw (Y) responsive; smooth roll (Z) more strongly.
-    filteredGyroX += 0.40f * (targetGyroX - filteredGyroX);
-    filteredGyroY += 0.40f * (targetGyroY - filteredGyroY);
-    filteredGyroZ += 0.20f * (targetGyroZ - filteredGyroZ);
+    // Very strong smoothing on all gyro axes. Responsiveness is intentionally
+    // sacrificed in this experiment to suppress residual jitter and drift.
+    const float gyroFilterAlpha = 0.025f;
+    filteredGyroX += gyroFilterAlpha * (targetGyroX - filteredGyroX);
+    filteredGyroY += gyroFilterAlpha * (targetGyroY - filteredGyroY);
+    filteredGyroZ += gyroFilterAlpha * (targetGyroZCorrected - filteredGyroZ);
 
     // Light smoothing on all accelerometer axes.
     filteredAccelX += 0.25f * (targetAccelX - filteredAccelX);
