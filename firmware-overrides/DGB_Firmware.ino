@@ -65,11 +65,23 @@ void setup() {
 
 void loop() {
   uint32_t now = micros();
-  // Pace DS4 reports at ~980 Hz (1020 us), slightly below the 1 ms USB interval.
-  if ((uint32_t)(now - lastReportUs) < 1020) {
+  // Keep a fixed 1020 us schedule (~980 Hz) instead of restarting the
+  // timer from 'now'. Restarting from 'now' adds all processing time to every
+  // period and can pull the actual report rate below the target.
+  constexpr uint32_t HID_REPORT_PERIOD_US = 1020;
+  uint32_t elapsedUs = (uint32_t)(now - lastReportUs);
+  if (elapsedUs < HID_REPORT_PERIOD_US) {
     return;
   }
-  lastReportUs = now;
+
+  // Advance the scheduled deadline, preserving the long-term 980 Hz cadence.
+  // If execution was delayed by more than one full period, resynchronize
+  // rather than emitting a burst of catch-up reports.
+  if (elapsedUs >= (HID_REPORT_PERIOD_US * 2U)) {
+    lastReportUs = now;
+  } else {
+    lastReportUs += HID_REPORT_PERIOD_US;
+  }
   ++reportCounter;
 
   const bool touched = touchSensor.readTouch();
