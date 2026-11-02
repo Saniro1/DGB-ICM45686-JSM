@@ -1,44 +1,49 @@
 # DGB ICM45686 JSM
 
-Development workspace for adapting the original DGB Dual Gyro Button firmware to two ICM-45686 IMUs on the RP2040, with DualShock 4 USB HID reporting for JoyShockMapper.
+Development workspace for adapting the original DGB Dual Gyro Button firmware to two ICM-45686 IMUs on the RP2040, preserving the original DGB wiring and JoyShockMapper-oriented USB behavior.
 
-## Requirements
+## Hardware constraints
 
-- RP2040 / Waveshare RP2040-Zero target
-- Two ICM-45686 sensors on shared SPI0, separate chip-selects
-- Preserve original DGB wiring: GP0 MISO, GP1 IMU 1 CS, GP2 SCK, GP3 MOSI, GP5 IMU 2 CS, GP9 touch pulse, GP12 touch input, 3V3 and GND
-- USB HID: Sony DualShock 4 compatible report descriptor and 1 ms polling interval
-- JoyShockMapper motion support
-- Target 1000 Hz host reporting; sensor ODR must be configured and validated independently
+- Board: Waveshare RP2040-Zero / RP2040
+- Two ICM-45686 sensors share SPI0 with independent chip selects
+- GP0 MISO, GP1 IMU 1 CS, GP2 SCK, GP3 MOSI, GP5 IMU 2 CS
+- GP9 touch pulse, GP12 touch input
+- Preserve the original 3V3/GND arrangement
 
-## Bring-up and porting notes
+## Confirmed ICM-45686 facts
 
-The original DGB source README describes two BMI160 devices on SPI0. The ICM-45686 is not register-compatible with BMI160. Its driver must use the ICM-45686 register map and initialization sequence; BMI160 register writes must not be reused.
+- WHO_AM_I is 0xE9.
+- INT1_STATUS0 RESET_DONE is bit 7 (0x80); the uploaded source's bit value was correct.
+- SREG_CTRL is indirect register 0xA267; reset default selects little-endian sensor data.
+- IREG address setup at 0x7C/0x7D followed by reading 0x7E is consistent with TDK's transport driver. The uploaded source's burst-address sequence was not the problem.
+- ODR code 0x5 selects 1600 Hz for both accel and gyro.
+- Full-scale code 0x1 selects +/-2000 dps gyro and +/-16 g accel.
+- TDK's Arduino reference transport uses SPI mode 3 at 6 MHz by default; the datasheet supports mode 0 or 3 depending on the interface configuration.
 
-For each ICM-45686:
-1. Keep its chip-select inactive while the other device is accessed.
-2. Perform the ICM-45686 soft reset using the documented interface register.
-3. Read WHO_AM_I (expected 0xE9).
-4. Configure gyro low-noise mode and a supported ODR / full-scale range.
-5. Verify data-ready and burst-read byte order before converting samples.
-6. Confirm both sensors independently before enabling averaging/fusion.
+References:
+- TDK ICM-45686 datasheet: https://invensense.tdk.com/wp-content/uploads/documentation/DS-000577_ICM-45686.pdf
+- TDK Arduino driver: https://github.com/tdk-invn-oss/motion.arduino.ICM45686
 
-The ICM-45686 supports up to 6.4 kHz ODR in low-noise mode; 1 kHz USB report cadence is a separate host-side requirement. Do not equate sensor ODR with USB HID polling.
+## Current work
 
-## Current input artifact
+Branch: `fix/tdk-verified-icm45686`
 
-DGB_ICM45686_Dual.uf2 was supplied for analysis. UF2 structure is valid (349 blocks, 89,344 bytes payload) and identifies RP2040 family ID 0xE48BFF56, flash target beginning at 0x10000000. This validates the target family, not sensor initialization or HID behavior.
+Patch: [patches/icm45686-driver-fix.patch](patches/icm45686-driver-fix.patch)
 
-## Status
+The patch:
+1. Aligns SPI mode and initial clock with TDK's Arduino reference.
+2. Preserves DRIVE_CONFIG0 and INTF_CONFIG1_OVRD across soft reset, following TDK's reset routine.
+3. Keeps the correct RESET_DONE bit and IREG access behavior.
+4. Prevents failed/uninitialized IMUs from being read, calibrated, or averaged as valid sensor data.
+5. Allows one valid sensor to be used temporarily for diagnosis if the other sensor fails.
 
-- [x] Confirmed original DGB pinout from the source repository README.
-- [x] Confirmed original firmware target is Waveshare RP2040-Zero / RP2040.
-- [x] Inspected supplied UF2 container and target metadata.
-- [ ] Obtain/read the current ICM45686 Arduino source project used to build the supplied UF2.
-- [ ] Audit dual-sensor SPI transactions, chip-select behavior, ICM-45686 reset/WHO_AM_I/configuration and sample decoding.
-- [ ] Audit USB HID descriptor and report format against DS4/JoyShockMapper expectations.
-- [ ] Build reproducible UF2 and validate on physical hardware.
+The patch was checked to apply cleanly to the supplied ZIP source. All source translation units passed a host-side C++ syntax check using lightweight Arduino/SPI stubs. This is not a full Arduino-core build and does not prove the firmware works on the RP2040.
 
-## Important limitation
+## Remaining validation
 
-The supplied UF2 is a compiled binary, not the source project. The destination repository was empty when inspected. A working firmware fix cannot be responsibly claimed until the source sketch/library configuration (or complete build project) is available and the hardware is tested.
+- Audit and reconcile the inherited USB HID descriptor/report layout with the actual report bytes and the reference UF2.
+- Verify USB VID/PID and Windows enumeration, then JoyShockMapper detection.
+- Build with the exact RP2040 Arduino core and Adafruit TinyUSB versions.
+- Test both sensors independently, then dual-sensor fusion, touch gating, and 1000 Hz host reporting on hardware.
+
+**Do not flash this patch as a verified UF2 yet.** It is the first source-level bring-up correction, not a hardware-tested release. Sensor ODR and USB report cadence are separate; 1600 Hz sensor ODR does not itself guarantee 1000 Hz USB reports.
