@@ -2,6 +2,9 @@
 #include "icm45686_spi.h"
 #include "touch_sensor.h"
 #include "usb_ds4_hid.h"
+#include "gyro_drift_filter.h"
+
+static GyroDriftFilter gyroFilter;
 
 static DS4InputReport ds4Report;
 static uint32_t lastReportUs = 0;
@@ -103,29 +106,21 @@ void loop() {
   previousAccelZ1 = rawAccelZ;
   if (spikeFilterSamples < 2) ++spikeFilterSamples;
 
-  // Small 0.25 dps deadzone. At the configured +/-2000 dps range,
-  // 4 raw gyro counts are approximately 0.24 dps.
-  const float gyroDeadzoneCounts = 4.0f;
-  if (fabsf(targetGyroX) < gyroDeadzoneCounts) targetGyroX = 0.0f;
-  if (fabsf(targetGyroY) < gyroDeadzoneCounts) targetGyroY = 0.0f;
-  if (fabsf(targetGyroZ) < gyroDeadzoneCounts) targetGyroZ = 0.0f;
+  // Drift correction and adaptive gyro smoothing run after axis mapping.
+  float gyroOutX, gyroOutY, gyroOutZ;
+  gyroFilter.process(targetGyroX, targetGyroY, targetGyroZ,
+                     gyroOutX, gyroOutY, gyroOutZ);
+  filteredGyroX = gyroOutX;
+  filteredGyroY = gyroOutY;
+  filteredGyroZ = gyroOutZ;
 
-  // Seed all filters from the first real sample to avoid a startup ramp.
+  // Keep accelerometer initialization and smoothing unchanged.
   if (!motionFilterInitialized) {
-    filteredGyroX = targetGyroX;
-    filteredGyroY = targetGyroY;
-    filteredGyroZ = targetGyroZ;
     filteredAccelX = targetAccelX;
     filteredAccelY = targetAccelY;
     filteredAccelZ = targetAccelZ;
     motionFilterInitialized = true;
   } else {
-    // Keep pitch (X) and yaw (Y) responsive; smooth roll (Z) more strongly.
-    filteredGyroX += 0.40f * (targetGyroX - filteredGyroX);
-    filteredGyroY += 0.40f * (targetGyroY - filteredGyroY);
-    filteredGyroZ += 0.20f * (targetGyroZ - filteredGyroZ);
-
-    // Light smoothing on all accelerometer axes.
     filteredAccelX += 0.25f * (targetAccelX - filteredAccelX);
     filteredAccelY += 0.25f * (targetAccelY - filteredAccelY);
     filteredAccelZ += 0.25f * (targetAccelZ - filteredAccelZ);
