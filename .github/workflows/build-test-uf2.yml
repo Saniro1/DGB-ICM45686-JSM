@@ -44,6 +44,7 @@ jobs:
           sudo apt-get install -y patch
           patch -d source -p1 --forward < patches/icm45686-driver-fix.patch
           cp firmware-overrides/DGB_Firmware.ino source/DGB_Firmware/DGB_Firmware.ino
+          cp firmware-overrides/gyro_drift_filter.h source/DGB_Firmware/gyro_drift_filter.h
           cp firmware-overrides/usb_ds4_hid.cpp source/DGB_Firmware/usb_ds4_hid.cpp
           cp firmware-overrides/usb_ds4_hid.h source/DGB_Firmware/usb_ds4_hid.h
 
