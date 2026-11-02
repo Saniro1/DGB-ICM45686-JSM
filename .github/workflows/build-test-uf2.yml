@@ -11,6 +11,7 @@ on:
       - 'DGB_Firmware_ICM45686_source.zip'
       - '.github/workflows/build-test-uf2.yml'
       - 'firmware-overrides/**'
+      - 'patches/**'
   workflow_dispatch:
 
 permissions:
@@ -40,6 +41,8 @@ jobs:
           mkdir -p source
           unzip -q DGB_Firmware_ICM45686_source.zip -d source
           test -f source/DGB_Firmware/DGB_Firmware.ino
+          sudo apt-get install -y patch
+          patch -d source -p1 --forward < patches/icm45686-driver-fix.patch
           cp firmware-overrides/DGB_Firmware.ino source/DGB_Firmware/DGB_Firmware.ino
           cp firmware-overrides/usb_ds4_hid.cpp source/DGB_Firmware/usb_ds4_hid.cpp
           cp firmware-overrides/usb_ds4_hid.h source/DGB_Firmware/usb_ds4_hid.h
