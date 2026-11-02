@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - fix/tdk-verified-icm45686
+      - test/swap-x-y
+      - test/swap-z-y
     paths:
       - 'DGB_Firmware_ICM45686_source.zip'
       - '.github/workflows/build-test-uf2.yml'
