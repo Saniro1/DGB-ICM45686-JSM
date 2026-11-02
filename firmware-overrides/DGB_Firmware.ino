@@ -16,6 +16,22 @@ static float filteredAccelY = 0.0f;
 static float filteredAccelZ = 0.0f;
 static bool motionFilterInitialized = false;
 
+// Three-sample median rejects isolated one-sample spikes without averaging
+// across the full movement signal. Applied only to roll and accelerometer.
+static float previousGyroZ1 = 0.0f;
+static float previousGyroZ2 = 0.0f;
+static float previousAccelX1 = 0.0f, previousAccelX2 = 0.0f;
+static float previousAccelY1 = 0.0f, previousAccelY2 = 0.0f;
+static float previousAccelZ1 = 0.0f, previousAccelZ2 = 0.0f;
+static uint8_t spikeFilterSamples = 0;
+
+static float medianOfThree(float a, float b, float c) {
+  if (a > b) { float t = a; a = b; b = t; }
+  if (b > c) { float t = b; b = c; c = t; }
+  if (a > b) { float t = a; a = b; b = t; }
+  return b;
+}
+
 void setup() {
   Serial.begin(115200);
   touchSensor.begin();
@@ -59,16 +75,41 @@ void loop() {
   // Reverse Y and Z at the sensor-to-report mapping boundary.
   const float targetGyroX = (float)motion.gx;
   const float targetGyroY = -((float)motion.gz);
-  const float targetGyroZ = (float)motion.gy;
+  const rawGyroZ = (float)motion.gy;
+  const rawAccelX = (float)motion.ax;
+  const rawAccelY = (float)motion.ay;
+  const rawAccelZ = (float)motion.az;
+
+  // During startup, seed the history. Once three samples are available,
+  // median filtering rejects isolated spikes on roll and all accel axes.
+  float targetGyroZ = rawGyroZ;
+  float targetAccelX = rawAccelX;
+  float targetAccelY = rawAccelY;
+  float targetAccelZ = rawAccelZ;
+  if (spikeFilterSamples >= 2) {
+    targetGyroZ = medianOfThree(previousGyroZ2, previousGyroZ1, rawGyroZ);
+    targetAccelX = medianOfThree(previousAccelX2, previousAccelX1, rawAccelX);
+    targetAccelY = medianOfThree(previousAccelY2, previousAccelY1, rawAccelY);
+    targetAccelZ = medianOfThree(previousAccelZ2, previousAccelZ1, rawAccelZ);
+  }
+  previousGyroZ2 = previousGyroZ1;
+  previousGyroZ1 = rawGyroZ;
+  previousAccelX2 = previousAccelX1;
+  previousAccelX1 = rawAccelX;
+  previousAccelY2 = previousAccelY1;
+  previousAccelY1 = rawAccelY;
+  previousAccelZ2 = previousAccelZ1;
+  previousAccelZ1 = rawAccelZ;
+  if (spikeFilterSamples < 2) ++spikeFilterSamples;
 
   // Seed all filters from the first real sample to avoid a startup ramp.
   if (!motionFilterInitialized) {
     filteredGyroX = targetGyroX;
     filteredGyroY = targetGyroY;
     filteredGyroZ = targetGyroZ;
-    filteredAccelX = (float)motion.ax;
-    filteredAccelY = (float)motion.ay;
-    filteredAccelZ = (float)motion.az;
+    filteredAccelX = targetAccelX;
+    filteredAccelY = targetAccelY;
+    filteredAccelZ = targetAccelZ;
     motionFilterInitialized = true;
   } else {
     // Keep pitch (X) and yaw (Y) responsive; smooth roll (Z) more strongly.
@@ -77,9 +118,9 @@ void loop() {
     filteredGyroZ += 0.20f * (targetGyroZ - filteredGyroZ);
 
     // Light smoothing on all accelerometer axes.
-    filteredAccelX += 0.25f * ((float)motion.ax - filteredAccelX);
-    filteredAccelY += 0.25f * ((float)motion.ay - filteredAccelY);
-    filteredAccelZ += 0.25f * ((float)motion.az - filteredAccelZ);
+    filteredAccelX += 0.25f * (targetAccelX - filteredAccelX);
+    filteredAccelY += 0.25f * (targetAccelY - filteredAccelY);
+    filteredAccelZ += 0.25f * (targetAccelZ - filteredAccelZ);
   }
 
   // Y and Z were already inverted above; do not invert them again at HID output.
