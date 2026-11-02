@@ -53,7 +53,7 @@ void loop() {
   ImuRawData motion;
   imu.readFusedMotion(motion);
 
-  // Keep the verified X/Y mapping. Remove the Z negation to correct its direction.
+  // Keep the verified sensor-to-report axis mapping.
   const float targetGyroX = (float)motion.gx;
   const float targetGyroY = (float)motion.gz;
   const float targetGyroZ = (float)motion.gy;
@@ -70,10 +70,15 @@ void loop() {
     filteredGyroZ += 0.40f * (targetGyroZ - filteredGyroZ);
   }
 
-  // Motion is always reported. Touch detection must never zero the IMU data.
+  // Round first, then invert Z at the final HID-report boundary.
   ds4Report.gyro_x = (int16_t)(filteredGyroX >= 0.0f ? filteredGyroX + 0.5f : filteredGyroX - 0.5f);
   ds4Report.gyro_y = (int16_t)(filteredGyroY >= 0.0f ? filteredGyroY + 0.5f : filteredGyroY - 0.5f);
-  ds4Report.gyro_z = (int16_t)(filteredGyroZ >= 0.0f ? filteredGyroZ + 0.5f : filteredGyroZ - 0.5f);
+  int32_t reportGyroZ = (int32_t)(filteredGyroZ >= 0.0f ? filteredGyroZ + 0.5f : filteredGyroZ - 0.5f);
+  reportGyroZ = -reportGyroZ;
+  if (reportGyroZ > 32767) reportGyroZ = 32767;
+  if (reportGyroZ < -32768) reportGyroZ = -32768;
+  ds4Report.gyro_z = (int16_t)reportGyroZ;
+
   ds4Report.accel_x = motion.ax;
   ds4Report.accel_y = motion.ay;
   ds4Report.accel_z = motion.az;
