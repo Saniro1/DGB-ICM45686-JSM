@@ -1,0 +1,261 @@
+--- a/DGB_Firmware/DGB_Firmware.ino
++++ b/DGB_Firmware/DGB_Firmware.ino
+@@ -51,8 +51,13 @@
+   }
+   Serial.println("waiting for calibration");
+ 
+-  // Calibrate stationary resting offsets
+-  imu.calibrateRestingOffsets();
++  // Calibrate only sensors that passed WHO_AM_I + configuration readback.
++  // Never average failed/uninitialized sensor data into the resting bias.
++  if (imu.sensorOk(0) || imu.sensorOk(1)) {
++    imu.calibrateRestingOffsets();
++  } else {
++    Serial.println("ERROR: no ICM-45686 initialized; motion output will remain zero");
++  }
+ 
+   // Clear DS4 report buffer
+   memset(&ds4Report, 0, sizeof(DS4InputReport));
+--- a/DGB_Firmware/config.h
++++ b/DGB_Firmware/config.h
+@@ -25,7 +25,7 @@
+ #define PIN_SPI_MOSI            3   // GP3: Master Out Slave In (board pin SDA / SDI)
+ #define PIN_SPI_CS2             5   // GP5: Chip Select for Sensor 2
+ 
+-#define SPI_CLOCK_SPEED_HZ      10000000  // 10 MHz (ICM-45686 supports up to 24 MHz)
++#define SPI_CLOCK_SPEED_HZ      6000000   // TDK Arduino driver default; increase only after validation
+ 
+ // ==============================================================================
+ // 2. CAPACITIVE AUTO TOUCH DETECTION PINOUT
+@@ -47,12 +47,14 @@
+ // Direct registers (SPI: bit 7 = 1 for read, 0 for write)
+ #define ICM_REG_ACCEL_DATA_X1   0x00  // Start of 14-byte block: accel XYZ, gyro XYZ, temp
+ #define ICM_REG_PWR_MGMT0       0x10  // [1:0] accel mode, [3:2] gyro mode
+-#define ICM_REG_INT1_STATUS0    0x19  // bit 7 = RESET_DONE
++#define ICM_REG_INT1_STATUS0    0x19  // bit 7 = RESET_DONE (read/clear)
+ #define ICM_REG_ACCEL_CONFIG0   0x1B  // [3:0] ODR, [6:4] full-scale
+ #define ICM_REG_GYRO_CONFIG0    0x1C  // [3:0] ODR, [7:4] full-scale
+ #define ICM_REG_WHO_AM_I        0x72
+ #define ICM_REG_IREG_ADDR_15_8  0x7C  // Indirect (MREG) access: address high, then low (0x7D)
+ #define ICM_REG_IREG_DATA       0x7E  // Indirect (MREG) access: data
++#define ICM_REG_INTF_CONFIG1_OVRD 0x2D  // Preserve across soft reset (TDK driver)
++#define ICM_REG_DRIVE_CONFIG0   0x32  // Preserve across soft reset (TDK driver)
+ #define ICM_REG_MISC2           0x7F  // bit 1 = SOFT_RST
+ 
+ // Indirect register holding the data endianness select (bit 1: 1 = big endian)
+--- a/DGB_Firmware/icm45686_spi.cpp
++++ b/DGB_Firmware/icm45686_spi.cpp
+@@ -22,7 +22,7 @@
+ }
+ 
+ void DualIcm45686::writeRegister(uint8_t csPin, uint8_t reg, uint8_t val) {
+-  SPI.beginTransaction(SPISettings(SPI_CLOCK_SPEED_HZ, MSBFIRST, SPI_MODE0));
++  SPI.beginTransaction(SPISettings(SPI_CLOCK_SPEED_HZ, MSBFIRST, SPI_MODE3));
+   digitalWrite(csPin, LOW);
+   SPI.transfer(reg & 0x7F); // Bit 7 = 0 for write
+   SPI.transfer(val);
+@@ -31,7 +31,7 @@
+ }
+ 
+ uint8_t DualIcm45686::readRegister(uint8_t csPin, uint8_t reg) {
+-  SPI.beginTransaction(SPISettings(SPI_CLOCK_SPEED_HZ, MSBFIRST, SPI_MODE0));
++  SPI.beginTransaction(SPISettings(SPI_CLOCK_SPEED_HZ, MSBFIRST, SPI_MODE3));
+   digitalWrite(csPin, LOW);
+   SPI.transfer(reg | 0x80); // Bit 7 = 1 for read
+   uint8_t val = SPI.transfer(0x00);
+@@ -45,7 +45,7 @@
+ // a few microseconds between accesses.
+ uint8_t DualIcm45686::readIndirect(uint8_t csPin, uint16_t addr) {
+   delayMicroseconds(4);
+-  SPI.beginTransaction(SPISettings(SPI_CLOCK_SPEED_HZ, MSBFIRST, SPI_MODE0));
++  SPI.beginTransaction(SPISettings(SPI_CLOCK_SPEED_HZ, MSBFIRST, SPI_MODE3));
+   digitalWrite(csPin, LOW);
+   SPI.transfer(ICM_REG_IREG_ADDR_15_8 & 0x7F);
+   SPI.transfer((uint8_t)(addr >> 8));
+@@ -70,22 +70,34 @@
+     return false;
+   }
+ 
+-  // 2. Soft reset, then wait for RESET_DONE (read of INT1_STATUS0 clears it)
++  // 2. Preserve the two interface/drive registers that TDK's reference
++  //    driver saves and restores around a soft reset.
++  const uint8_t driveConfig0 = readRegister(cs, ICM_REG_DRIVE_CONFIG0);
++  const uint8_t intfConfig1Ovrd = readRegister(cs, ICM_REG_INTF_CONFIG1_OVRD);
++
++  // 3. Soft reset. REG_MISC2.SOFT_RST is bit 1 (0x02).
+   writeRegister(cs, ICM_REG_MISC2, ICM_SOFT_RST_BIT);
+-  delay(2);
+-  bool resetDone = false;
+-  for (int i = 0; i < 20 && !resetDone; i++) {
+-    resetDone = (readRegister(cs, ICM_REG_INT1_STATUS0) & ICM_RESET_DONE_BIT) != 0;
+-    if (!resetDone) delay(1);
+-  }
+-  if (!resetDone) {
++  delay(1);  // TDK reference driver waits at least 1 ms for reset to take effect.
++
++  // Restore the saved settings before using the sensor interface further.
++  writeRegister(cs, ICM_REG_DRIVE_CONFIG0, driveConfig0);
++  writeRegister(cs, ICM_REG_INTF_CONFIG1_OVRD, intfConfig1Ovrd);
++
++  // 4. Read RESET_DONE. INT1_STATUS0 bit 7 is the RESET_DONE flag and is
++  //    read-to-clear. The reset-done interrupt is enabled by the reset value
++  //    of INT1_CONFIG0.
++  const uint8_t resetStatus = readRegister(cs, ICM_REG_INT1_STATUS0);
++  if ((resetStatus & ICM_RESET_DONE_BIT) == 0) {
+     return false;
+   }
+ 
+-  // 3. Data byte order (SREG_CTRL bit 1: 1 = big endian)
++  // 5. Read the device's actual data endianness. Reset default is little
++  //    endian; the bit is 1 only if the host previously selected big endian.
+   _bigEndian[idx] = (readIndirect(cs, ICM_MREG_SREG_CTRL) & ICM_SREG_BIG_ENDIAN_BIT) != 0;
+ 
+-  // 4. Full scale and output data rate while the sensors are still off
++  // 6. Full scale and output data rate while the sensors are still off.
++  //    TDK's register definitions use ODR code 0x5 for 1600 Hz and gyro
++  //    FS code 0x1 for +/-2000 dps; accel FS code 0x1 is +/-16 g.
+   const uint8_t gyroCfg  = (uint8_t)((IMU_GYRO_FS << 4) | IMU_GYRO_ODR);
+   const uint8_t accelCfg = (uint8_t)((IMU_ACCEL_FS << 4) | IMU_ACCEL_ODR);
+   writeRegister(cs, ICM_REG_GYRO_CONFIG0, gyroCfg);
+@@ -96,7 +108,7 @@
+   writeRegister(cs, ICM_REG_PWR_MGMT0, ICM_PWR_ACCEL_GYRO_LN);
+   delay(100);
+ 
+-  // 6. Read back to confirm the configuration took
++  // 8. Read back to confirm the configuration took
+   if (readRegister(cs, ICM_REG_GYRO_CONFIG0) != gyroCfg) return false;
+   if (readRegister(cs, ICM_REG_ACCEL_CONFIG0) != accelCfg) return false;
+   if ((readRegister(cs, ICM_REG_PWR_MGMT0) & 0x0F) != ICM_PWR_ACCEL_GYRO_LN) return false;
+@@ -125,11 +137,14 @@
+   return _ok[0] && _ok[1];
+ }
+ 
+-void DualIcm45686::readSensorData(int idx, ImuRawData &data) {
++bool DualIcm45686::readSensorData(int idx, ImuRawData &data) {
++  data = {0, 0, 0, 0, 0, 0};
++  if (idx < 0 || idx > 1 || !_ok[idx]) return false;
++
+   const uint8_t cs = _cs[idx];
+   uint8_t raw[12];
+ 
+-  SPI.beginTransaction(SPISettings(SPI_CLOCK_SPEED_HZ, MSBFIRST, SPI_MODE0));
++  SPI.beginTransaction(SPISettings(SPI_CLOCK_SPEED_HZ, MSBFIRST, SPI_MODE3));
+   digitalWrite(cs, LOW);
+   SPI.transfer(ICM_REG_ACCEL_DATA_X1 | 0x80); // Burst read from 0x00
+   for (int i = 0; i < 12; i++) {
+@@ -152,52 +167,69 @@
+   data.gx = v[3];
+   data.gy = v[4];
+   data.gz = v[5];
++  return true;
+ }
+ 
+ void DualIcm45686::readFusedMotion(ImuRawData &fused) {
+-  ImuRawData d1, d2;
+-  readSensorData(0, d1);
+-  readSensorData(1, d2);
+-
+-  // Apply zero-rate calibration offsets and average in 32-bit to avoid overflow
+-  const int32_t gx = ((int32_t)d1.gx - bias1.gx + (int32_t)d2.gx - bias2.gx) / 2;
+-  const int32_t gy = ((int32_t)d1.gy - bias1.gy + (int32_t)d2.gy - bias2.gy) / 2;
+-  const int32_t gz = ((int32_t)d1.gz - bias1.gz + (int32_t)d2.gz - bias2.gz) / 2;
+-
+-  fused.gx = (int16_t)(gx * IMU_SIGN_X);
+-  fused.gy = (int16_t)(gy * IMU_SIGN_Y);
+-  fused.gz = (int16_t)(gz * IMU_SIGN_Z);
+-
+-  fused.ax = (int16_t)(((int32_t)d1.ax + d2.ax) / 2 * IMU_SIGN_X);
+-  fused.ay = (int16_t)(((int32_t)d1.ay + d2.ay) / 2 * IMU_SIGN_Y);
+-  fused.az = (int16_t)(((int32_t)d1.az + d2.az) / 2 * IMU_SIGN_Z);
++  ImuRawData d1 = {}, d2 = {};
++  const bool ok1 = readSensorData(0, d1);
++  const bool ok2 = readSensorData(1, d2);
++  if (!ok1 && !ok2) {
++    fused = {0, 0, 0, 0, 0, 0};
++    return;
++  }
++
++  // Use the surviving sensor if only one IMU initialized. In normal dual-IMU
++  // operation, subtract each sensor's own bias and average in 32-bit math.
++  const int32_t gx1 = ok1 ? (int32_t)d1.gx - bias1.gx : 0;
++  const int32_t gy1 = ok1 ? (int32_t)d1.gy - bias1.gy : 0;
++  const int32_t gz1 = ok1 ? (int32_t)d1.gz - bias1.gz : 0;
++  const int32_t gx2 = ok2 ? (int32_t)d2.gx - bias2.gx : 0;
++  const int32_t gy2 = ok2 ? (int32_t)d2.gy - bias2.gy : 0;
++  const int32_t gz2 = ok2 ? (int32_t)d2.gz - bias2.gz : 0;
++  const int32_t divisor = (ok1 && ok2) ? 2 : 1;
++
++  fused.gx = (int16_t)(((gx1 + gx2) / divisor) * IMU_SIGN_X);
++  fused.gy = (int16_t)(((gy1 + gy2) / divisor) * IMU_SIGN_Y);
++  fused.gz = (int16_t)(((gz1 + gz2) / divisor) * IMU_SIGN_Z);
++
++  const int32_t ax = (ok1 ? d1.ax : 0) + (ok2 ? d2.ax : 0);
++  const int32_t ay = (ok1 ? d1.ay : 0) + (ok2 ? d2.ay : 0);
++  const int32_t az = (ok1 ? d1.az : 0) + (ok2 ? d2.az : 0);
++  fused.ax = (int16_t)((ax / divisor) * IMU_SIGN_X);
++  fused.ay = (int16_t)((ay / divisor) * IMU_SIGN_Y);
++  fused.az = (int16_t)((az / divisor) * IMU_SIGN_Z);
+ }
+ 
+ void DualIcm45686::calibrateRestingOffsets() {
+   int64_t sumGx1 = 0, sumGy1 = 0, sumGz1 = 0;
+   int64_t sumGx2 = 0, sumGy2 = 0, sumGz2 = 0;
+ 
+-  for (int i = 0; i < CALIBRATION_SAMPLES; i++) {
+-    ImuRawData d1, d2;
+-    readSensorData(0, d1);
+-    readSensorData(1, d2);
+-
+-    sumGx1 += d1.gx;
+-    sumGy1 += d1.gy;
+-    sumGz1 += d1.gz;
+-
+-    sumGx2 += d2.gx;
+-    sumGy2 += d2.gy;
+-    sumGz2 += d2.gz;
++  if (!_ok[0] && !_ok[1]) return;
+ 
++  for (int i = 0; i < CALIBRATION_SAMPLES; i++) {
++    ImuRawData d1 = {}, d2 = {};
++    if (readSensorData(0, d1)) {
++      sumGx1 += d1.gx;
++      sumGy1 += d1.gy;
++      sumGz1 += d1.gz;
++    }
++    if (readSensorData(1, d2)) {
++      sumGx2 += d2.gx;
++      sumGy2 += d2.gy;
++      sumGz2 += d2.gz;
++    }
+     delayMicroseconds(1000);
+   }
+ 
+-  bias1.gx = (int32_t)(sumGx1 / CALIBRATION_SAMPLES);
+-  bias1.gy = (int32_t)(sumGy1 / CALIBRATION_SAMPLES);
+-  bias1.gz = (int32_t)(sumGz1 / CALIBRATION_SAMPLES);
+-
+-  bias2.gx = (int32_t)(sumGx2 / CALIBRATION_SAMPLES);
+-  bias2.gy = (int32_t)(sumGy2 / CALIBRATION_SAMPLES);
+-  bias2.gz = (int32_t)(sumGz2 / CALIBRATION_SAMPLES);
++  if (_ok[0]) {
++    bias1.gx = (int32_t)(sumGx1 / CALIBRATION_SAMPLES);
++    bias1.gy = (int32_t)(sumGy1 / CALIBRATION_SAMPLES);
++    bias1.gz = (int32_t)(sumGz1 / CALIBRATION_SAMPLES);
++  }
++  if (_ok[1]) {
++    bias2.gx = (int32_t)(sumGx2 / CALIBRATION_SAMPLES);
++    bias2.gy = (int32_t)(sumGy2 / CALIBRATION_SAMPLES);
++    bias2.gz = (int32_t)(sumGz2 / CALIBRATION_SAMPLES);
++  }
+ }
+--- a/DGB_Firmware/icm45686_spi.h
++++ b/DGB_Firmware/icm45686_spi.h
+@@ -35,7 +35,7 @@
+   uint8_t readRegister(uint8_t csPin, uint8_t reg);
+ 
+   // idx: 0 = sensor 1 (CS1), 1 = sensor 2 (CS2)
+-  void readSensorData(int idx, ImuRawData &data);
++  bool readSensorData(int idx, ImuRawData &data);
+   void readFusedMotion(ImuRawData &fused);
+   void calibrateRestingOffsets();
+ 
