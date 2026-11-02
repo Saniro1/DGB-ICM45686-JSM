@@ -51,7 +51,7 @@ void loop() {
   // TEST VARIANT B: swap gyro Z and Y; keep X unchanged.
   ds4Report.gyro_x = motion.gx;
   ds4Report.gyro_y = motion.gz;
-  ds4Report.gyro_z = -motion.gy;
+  ds4Report.gyro_z = (int16_t)(-((int32_t)motion.gy));
   ds4Report.accel_x = motion.ax;
   ds4Report.accel_y = motion.ay;
   ds4Report.accel_z = motion.az;
