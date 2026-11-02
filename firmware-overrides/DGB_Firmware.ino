@@ -8,8 +8,6 @@ static uint32_t lastReportUs = 0;
 static uint16_t reportCounter = 0;
 
 // Light first-order low-pass filter for gyro jitter.
-// Alpha 0.40 at a 1 kHz report rate reduces high-frequency noise
-// while keeping added response delay low.
 static float filteredGyroX = 0.0f;
 static float filteredGyroY = 0.0f;
 static float filteredGyroZ = 0.0f;
@@ -55,10 +53,10 @@ void loop() {
   ImuRawData motion;
   imu.readFusedMotion(motion);
 
-  // Preserve the verified Version B axis mapping and Z direction.
+  // Keep the verified X/Y mapping. Remove the Z negation to correct its direction.
   const float targetGyroX = (float)motion.gx;
   const float targetGyroY = (float)motion.gz;
-  const float targetGyroZ = (float)(-((int32_t)motion.gy));
+  const float targetGyroZ = (float)motion.gy;
 
   // Seed the filter from the first real sample to avoid a startup ramp.
   if (!gyroFilterInitialized) {
