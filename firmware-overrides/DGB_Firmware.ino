@@ -118,17 +118,17 @@ void loop() {
   const float gyroMagnitudeSq =
       rawGyroX * rawGyroX + rawGyroY * rawGyroY + rawGyroZ * rawGyroZ;
   if (gyroMagnitudeSq < (400.0f * 400.0f)) {
-    const float biasAlpha = 0.005f;
+    const float biasAlpha = 0.0015f;
     gyroBiasX += biasAlpha * (rawGyroX - gyroBiasX);
     gyroBiasY += biasAlpha * (rawGyroY - gyroBiasY);
     gyroBiasZ += biasAlpha * (rawGyroZ - gyroBiasZ);
   }
 
-  // Remove the learned bias, then apply a large zero-rate deadband.
+  // Remove the learned bias, then apply a smaller near-zero deadband.
   float targetGyroX = rawGyroX - gyroBiasX;
   float targetGyroY = rawGyroY - gyroBiasY;
   float targetGyroZCorrected = rawGyroZ - gyroBiasZ;
-  const float gyroDeadband = 18.0f;
+  const float gyroDeadband = 6.0f;
   if (fabsf(targetGyroX) < gyroDeadband) targetGyroX = 0.0f;
   if (fabsf(targetGyroY) < gyroDeadband) targetGyroY = 0.0f;
   if (fabsf(targetGyroZCorrected) < gyroDeadband) targetGyroZCorrected = 0.0f;
@@ -143,9 +143,8 @@ void loop() {
     filteredAccelZ = targetAccelZ;
     motionFilterInitialized = true;
   } else {
-    // Very strong smoothing on all gyro axes. Responsiveness is intentionally
-    // sacrificed in this experiment to suppress residual jitter and drift.
-    const float gyroFilterAlpha = 0.025f;
+    // Moderate smoothing: retain some noise rejection without holding back aim.
+    const float gyroFilterAlpha = 0.10f;
     filteredGyroX += gyroFilterAlpha * (targetGyroX - filteredGyroX);
     filteredGyroY += gyroFilterAlpha * (targetGyroY - filteredGyroY);
     filteredGyroZ += gyroFilterAlpha * (targetGyroZCorrected - filteredGyroZ);
