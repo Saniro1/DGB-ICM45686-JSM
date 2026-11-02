@@ -7,6 +7,14 @@ static DS4InputReport ds4Report;
 static uint32_t lastReportUs = 0;
 static uint16_t reportCounter = 0;
 
+// Light first-order low-pass filter for gyro jitter.
+// Alpha 0.40 at a 1 kHz report rate reduces high-frequency noise
+// while keeping added response delay low.
+static float filteredGyroX = 0.0f;
+static float filteredGyroY = 0.0f;
+static float filteredGyroZ = 0.0f;
+static bool gyroFilterInitialized = false;
+
 void setup() {
   Serial.begin(115200);
   touchSensor.begin();
@@ -47,11 +55,27 @@ void loop() {
   ImuRawData motion;
   imu.readFusedMotion(motion);
 
+  // Preserve the verified Version B axis mapping and Z direction.
+  const float targetGyroX = (float)motion.gx;
+  const float targetGyroY = (float)motion.gz;
+  const float targetGyroZ = (float)(-((int32_t)motion.gy));
+
+  // Seed the filter from the first real sample to avoid a startup ramp.
+  if (!gyroFilterInitialized) {
+    filteredGyroX = targetGyroX;
+    filteredGyroY = targetGyroY;
+    filteredGyroZ = targetGyroZ;
+    gyroFilterInitialized = true;
+  } else {
+    filteredGyroX += 0.40f * (targetGyroX - filteredGyroX);
+    filteredGyroY += 0.40f * (targetGyroY - filteredGyroY);
+    filteredGyroZ += 0.40f * (targetGyroZ - filteredGyroZ);
+  }
+
   // Motion is always reported. Touch detection must never zero the IMU data.
-  // TEST VARIANT B: swap gyro Z and Y; keep X unchanged.
-  ds4Report.gyro_x = motion.gx;
-  ds4Report.gyro_y = motion.gz;
-  ds4Report.gyro_z = (int16_t)(-((int32_t)motion.gy));
+  ds4Report.gyro_x = (int16_t)(filteredGyroX >= 0.0f ? filteredGyroX + 0.5f : filteredGyroX - 0.5f);
+  ds4Report.gyro_y = (int16_t)(filteredGyroY >= 0.0f ? filteredGyroY + 0.5f : filteredGyroY - 0.5f);
+  ds4Report.gyro_z = (int16_t)(filteredGyroZ >= 0.0f ? filteredGyroZ + 0.5f : filteredGyroZ - 0.5f);
   ds4Report.accel_x = motion.ax;
   ds4Report.accel_y = motion.ay;
   ds4Report.accel_z = motion.az;
