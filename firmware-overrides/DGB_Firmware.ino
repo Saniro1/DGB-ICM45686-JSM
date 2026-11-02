@@ -7,11 +7,14 @@ static DS4InputReport ds4Report;
 static uint32_t lastReportUs = 0;
 static uint16_t reportCounter = 0;
 
-// Light first-order low-pass filter for gyro jitter.
+// First-order low-pass filters. Lower alpha means stronger smoothing.
 static float filteredGyroX = 0.0f;
 static float filteredGyroY = 0.0f;
 static float filteredGyroZ = 0.0f;
-static bool gyroFilterInitialized = false;
+static float filteredAccelX = 0.0f;
+static float filteredAccelY = 0.0f;
+static float filteredAccelZ = 0.0f;
+static bool motionFilterInitialized = false;
 
 void setup() {
   Serial.begin(115200);
@@ -58,16 +61,25 @@ void loop() {
   const float targetGyroY = -((float)motion.gz);
   const float targetGyroZ = (float)motion.gy;
 
-  // Seed the filter from the first real sample to avoid a startup ramp.
-  if (!gyroFilterInitialized) {
+  // Seed all filters from the first real sample to avoid a startup ramp.
+  if (!motionFilterInitialized) {
     filteredGyroX = targetGyroX;
     filteredGyroY = targetGyroY;
     filteredGyroZ = targetGyroZ;
-    gyroFilterInitialized = true;
+    filteredAccelX = (float)motion.ax;
+    filteredAccelY = (float)motion.ay;
+    filteredAccelZ = (float)motion.az;
+    motionFilterInitialized = true;
   } else {
+    // Keep pitch (X) and yaw (Y) responsive; smooth roll (Z) more strongly.
     filteredGyroX += 0.40f * (targetGyroX - filteredGyroX);
     filteredGyroY += 0.40f * (targetGyroY - filteredGyroY);
-    filteredGyroZ += 0.40f * (targetGyroZ - filteredGyroZ);
+    filteredGyroZ += 0.20f * (targetGyroZ - filteredGyroZ);
+
+    // Light smoothing on all accelerometer axes.
+    filteredAccelX += 0.25f * ((float)motion.ax - filteredAccelX);
+    filteredAccelY += 0.25f * ((float)motion.ay - filteredAccelY);
+    filteredAccelZ += 0.25f * ((float)motion.az - filteredAccelZ);
   }
 
   // Y and Z were already inverted above; do not invert them again at HID output.
@@ -78,9 +90,9 @@ void loop() {
   if (reportGyroZ < -32768) reportGyroZ = -32768;
   ds4Report.gyro_z = (int16_t)reportGyroZ;
 
-  ds4Report.accel_x = motion.ax;
-  ds4Report.accel_y = motion.ay;
-  ds4Report.accel_z = motion.az;
+  ds4Report.accel_x = (int16_t)(filteredAccelX >= 0.0f ? filteredAccelX + 0.5f : filteredAccelX - 0.5f);
+  ds4Report.accel_y = (int16_t)(filteredAccelY >= 0.0f ? filteredAccelY + 0.5f : filteredAccelY - 0.5f);
+  ds4Report.accel_z = (int16_t)(filteredAccelZ >= 0.0f ? filteredAccelZ + 0.5f : filteredAccelZ - 0.5f);
 
   // Keep touch state independent from motion reporting.
   ds4Report.finger1_id = (uint8_t)((touched ? 0x00 : 0x80) | (reportCounter & 0x7F));
