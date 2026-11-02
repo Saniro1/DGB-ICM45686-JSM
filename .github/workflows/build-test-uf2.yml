@@ -1,0 +1,59 @@
+name: Build dual ICM-45686 test UF2
+
+on:
+  push:
+    branches:
+      - fix/tdk-verified-icm45686
+    paths:
+      - 'DGB_Firmware_ICM45686_source.zip'
+      - '.github/workflows/build-test-uf2.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out test branch
+        uses: actions/checkout@v4
+
+      - name: Install Arduino CLI
+        uses: arduino/setup-arduino-cli@v2
+
+      - name: Install Arduino-Pico 5.4.4
+        run: |
+          arduino-cli config init
+          arduino-cli config add board_manager.additional_urls https://github.com/earlephilhower/arduino-pico/releases/download/global/package_rp2040_index.json
+          arduino-cli core update-index
+          arduino-cli core install rp2040:rp2040@5.4.4
+
+      - name: Extract firmware source
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y unzip
+          mkdir -p source
+          unzip -q DGB_Firmware_ICM45686_source.zip -d source
+          test -f source/DGB_Firmware/DGB_Firmware.ino
+
+      - name: Compile Waveshare RP2040-Zero firmware
+        run: |
+          arduino-cli compile \
+            --fqbn rp2040:rp2040:waveshare_rp2040_zero:usbstack=tinyusb \
+            --export-binaries \
+            --output-dir "$GITHUB_WORKSPACE/build" \
+            source/DGB_Firmware
+
+      - name: Verify UF2 output
+        run: |
+          ls -lh build/*.uf2
+          test -s "$(find build -maxdepth 1 -name '*.uf2' -print -quit)"
+
+      - name: Upload UF2 build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DGB_ICM45686_TEST_UF2
+          path: build/*.uf2
+          if-no-files-found: error
+          retention-days: 30
